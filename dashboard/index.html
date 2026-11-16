@@ -147,18 +147,41 @@
   // Telegram's signed initData IS the bearer credential: the server verifies
   // the HMAC against the bot token, so no session exchange is needed.
   //
-  // Telegram passes it in the URL fragment (#tgWebAppData=...). The official
-  // SDK reads it from there, but if the SDK failed to load (telegram.org is
-  // unreachable on some networks) we parse the fragment ourselves — the
-  // credential is the same either way.
+  // Telegram delivers the launch parameters in the URL fragment
+  // (#tgWebAppData=...) and the whole query string is percent-encoded, so
+  // the "&" separators inside the credential arrive as "%26" and the value
+  // must be decoded as a whole. Telegram's own SDK reads it that way
+  // (urlParseHashParams -> urlParseQueryString).
+  //
+  // The SDK may not have parsed the fragment yet when this script runs, so
+  // the fragment is parsed here as well; both the encoded and the raw form
+  // are handled. Splitting a raw credential on "&" would truncate it at the
+  // first separator and send an unusable bearer token.
   function readInitData() {
     if (tg && tg.initData) return tg.initData;
-    var hash = window.location.hash || "";
-    var match = /(?:^|[#&])tgWebAppData=([^&]+)/.exec(hash);
-    return match ? decodeURIComponent(match[1]) : "";
+    var sources = [window.location.hash || "", window.location.search || ""];
+    for (var i = 0; i < sources.length; i++) {
+      var text = sources[i];
+      var marker = "tgWebAppData=";
+      var at = text.indexOf(marker);
+      if (at < 0) continue;
+      var rest = text.slice(at + marker.length);
+      var encoded = rest.indexOf("%3D") >= 0 || rest.indexOf("%26") >= 0;
+      if (encoded) {
+        var amp = rest.indexOf("&");
+        var value = amp >= 0 ? rest.slice(0, amp) : rest;
+        try {
+          return decodeURIComponent(value);
+        } catch (e) { /* fall through to the raw value */ }
+        return value;
+      }
+      // Raw form: the credential is the remainder of the fragment.
+      return rest;
+    }
+    return "";
   }
 
-  const initData = readInitData();
+  let initData = readInitData();
 
   let currentPath = "";
   let currentFile = null;
@@ -308,10 +331,23 @@
   });
 
   (async function () {
-    if (!initData) {
+    // The SDK may still be loading when this script runs, so an empty
+    // credential is not yet a failure: wait for the SDK to publish initData
+    // before giving up. Without this the page reports "open the app from
+    // Telegram" on a slow connection even though the credential is there.
+    var credential = initData;
+    if (!credential) {
+      status("Подключение к Telegram…");
+      for (var attempt = 0; attempt < 50 && !credential; attempt++) {
+        await new Promise(function (r) { setTimeout(r, 100); });
+        credential = readInitData();
+      }
+    }
+    if (!credential) {
       status("Откройте приложение из Telegram", true);
       return;
     }
+    initData = credential;
     await load("");
   })();
 })();

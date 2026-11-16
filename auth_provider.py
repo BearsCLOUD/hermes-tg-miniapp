@@ -49,8 +49,19 @@ class TelegramMiniAppProvider(DashboardAuthProvider):
         user_id = str(user.get("id") or "")
         if not user_id:
             return None
+        principal = f"telegram:{user_id}"
+        # The gate logs only failures, so a request that reaches us with a
+        # valid signature leaves no trace. That makes "the phone never
+        # arrived" and "the phone arrived and was accepted" look identical.
+        # Record the acceptance (never the payload) so the next outage can be
+        # told apart from the next one.
+        LOG.info(
+            "telegram-miniapp: initData accepted (principal=%s, token_len=%d)",
+            principal,
+            len(token or ""),
+        )
         return TokenPrincipal(
-            principal=f"telegram:{user_id}", provider=self.name, scopes=("miniapp",)
+            principal=principal, provider=self.name, scopes=("miniapp",)
         )
 
     # --- interactive methods: unsupported (token-only) ---

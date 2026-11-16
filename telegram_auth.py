@@ -76,8 +76,11 @@ def verify_init_data(
     # library: ``validate()`` skips ``hash`` only, while ``validate3rd()``
     # skips both because it signs a different string).
 
+    # Sort the complete ``key=value`` pairs, not the keys: that is what
+    # Telegram's own library does (``pairs.sort()`` in init-data-node), and
+    # the two orders differ whenever one key is a prefix of another.
     data_check_string = "\n".join(
-        f"{key}={value}" for key, value in sorted(fields.items())
+        sorted(f"{key}={value}" for key, value in fields.items())
     )
     expected = hmac.new(
         _secret_key(bot_token), data_check_string.encode("utf-8"), hashlib.sha256
