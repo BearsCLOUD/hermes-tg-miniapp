@@ -1,0 +1,13 @@
+{
+  "name": "telegram-miniapp",
+  "label": "Telegram Mini App",
+  "description": "File browser and Markdown editor opened from the Telegram bot",
+  "icon": "FolderOpen",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/telegram-miniapp",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

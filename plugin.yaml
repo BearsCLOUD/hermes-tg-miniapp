@@ -1,0 +1,34 @@
+name: telegram-miniapp
+label: Telegram Mini App (files & Markdown)
+kind: standalone
+version: 0.1beta
+description: >
+  Telegram Mini App for Hermes: a file browser and a Markdown editor that open
+  inside Telegram's WebView straight from the bot's chat.
+
+  The Mini App page is served from this plugin's ``dashboard/`` directory and
+  talks to the routes mounted by ``dashboard/plugin_api.py``. Telegram's signed
+  ``initData`` travels as a bearer token; the plugin's dashboard auth provider
+  verifies that HMAC signature against the bot token, so an unsigned or
+  tampered payload is rejected at the gate and never reaches the file routes.
+
+  File access delegates to Hermes' managed-files policy, so the same root lock
+  and the same credential denylist that guard the dashboard apply here — this
+  plugin never resolves a path on its own.
+
+  The Mini App is opened by the chat menu button, so there is no bot command
+  to type and nothing competes with the built-in command handling.
+author: BearsCLOUD
+license: MIT
+requires_env:
+  - name: TELEGRAM_BOT_TOKEN
+    description: "Telegram bot token; its HMAC signature verifies the Mini App's initData"
+    prompt: "Telegram bot token"
+    password: true
+optional_env:
+  - name: HERMES_DASHBOARD_PUBLIC_URL
+    description: "Public HTTPS URL of the dashboard; the Mini App page URL is built from it (Telegram requires HTTPS)"
+    prompt: "Public dashboard URL"
+    password: false
+provides_tools: []
+provides_hooks: []

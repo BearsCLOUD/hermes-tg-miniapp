@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Файлы — Hermes</title>
+<!-- Telegram's official Mini App SDK, served from this origin: telegram.org is
+     unreachable from some networks, and without the SDK the page has no
+     initData. The CDN copy is only a fallback. SRI is not applicable: the
+     upstream file is not versioned with an immutable hash. -->
+<script src="/dashboard-plugins/telegram-miniapp/telegram-web-app.js"></script>
+<script>
+  if (!window.Telegram || !window.Telegram.WebApp) {
+    var fallback = document.createElement("script");
+    fallback.src = "https://telegram.org/js/telegram-web-app.js";
+    fallback.async = false;
+    document.head.appendChild(fallback);
+  }
+</script>
+<style>
+  :root {
+    --bg: #17191c; --panel: #202328; --line: #2e3339; --text: #e8eaed;
+    --muted: #969ba3; --accent: #4c8dff; --danger: #e5534b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex: none;
+  }
+  header .path {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 13px; color: var(--muted);
+  }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 12px; font-size: 14px; cursor: pointer; flex: none;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #tree {
+    flex: 0 0 42%; overflow-y: auto; border-right: 1px solid var(--line);
+    padding: 4px 0;
+  }
+  #tree.hidden { display: none; }
+  .entry {
+    display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    cursor: pointer; font-size: 14px;
+  }
+  .entry:hover { background: #262a30; }
+  .entry .icon { flex: none; opacity: .8; }
+  .entry .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #editor { flex: 1; display: none; flex-direction: column; min-width: 0; }
+  #editor.open { display: flex; }
+  #editor textarea {
+    flex: 1; width: 100%; border: 0; outline: 0; resize: none;
+    background: var(--bg); color: var(--text); padding: 12px;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #preview {
+    flex: 1; overflow-y: auto; padding: 12px; display: none;
+    font-size: 14px; line-height: 1.6;
+  }
+  #preview.open { display: block; }
+  #preview h1, #preview h2, #preview h3 { margin: 12px 0 6px; line-height: 1.25; }
+  #preview p { margin: 6px 0; }
+  #preview code, #preview pre {
+    background: #22262b; border-radius: 6px; font-family: ui-monospace, Menlo, monospace;
+  }
+  #preview code { padding: 1px 5px; }
+  #preview pre { padding: 10px; overflow-x: auto; }
+  #preview blockquote {
+    margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line);
+    color: var(--muted);
+  }
+  #status {
+    flex: none; padding: 8px 12px; font-size: 13px; color: var(--muted);
+    background: var(--panel); border-top: 1px solid var(--line); min-height: 36px;
+  }
+  #status.err { color: var(--danger); }
+  .back { display: none; }
+  @media (max-width: 640px) {
+    #tree { flex: 1 0 100%; }
+    #tree.hidden { display: none; }
+    #editor.open { flex: 1 0 100%; }
+    .back { display: inline-block; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <button class="ghost back" id="back">←</button>
+  <div class="path" id="path">Загрузка…</div>
+  <button class="ghost" id="previewToggle" disabled>Просмотр</button>
+  <button id="save" disabled>Сохранить</button>
+</header>
+<main>
+  <div id="tree"></div>
+  <div id="editor">
+    <textarea id="text" spellcheck="false"></textarea>
+    <div id="preview"></div>
+  </div>
+</main>
+<div id="status"></div>
+
+<script>
+(function () {
+  const API = "/api/plugins/telegram-miniapp";
+  const tg = window.Telegram && window.Telegram.WebApp;
+
+  // Telegram keeps the Mini App in its loading state until ``ready()`` is
+  // called. The SDK may arrive late (fallback script) or not at all, so we
+  // also watch for it: without this the WebView spins forever.
+  function markReady() {
+    const app = window.Telegram && window.Telegram.WebApp;
+    if (app && typeof app.ready === "function") {
+      app.ready();
+      return true;
+    }
+    return false;
+  }
+
+  markReady();
+  if (!tg) {
+    var readyWatch = setInterval(function () {
+      if (markReady()) clearInterval(readyWatch);
+    }, 100);
+    setTimeout(function () { clearInterval(readyWatch); }, 10000);
+  }
+
+  const tree = document.getElementById("tree");
+  const editor = document.getElementById("editor");
+  const textarea = document.getElementById("text");
+  const preview = document.getElementById("preview");
+  const pathEl = document.getElementById("path");
+  const statusEl = document.getElementById("status");
+  const saveBtn = document.getElementById("save");
+  const previewBtn = document.getElementById("previewToggle");
+  const backBtn = document.getElementById("back");
+
+  // Telegram's signed initData IS the bearer credential: the server verifies
+  // the HMAC against the bot token, so no session exchange is needed.
+  //
+  // Telegram passes it in the URL fragment (#tgWebAppData=...). The official
+  // SDK reads it from there, but if the SDK failed to load (telegram.org is
+  // unreachable on some networks) we parse the fragment ourselves — the
+  // credential is the same either way.
+  function readInitData() {
+    if (tg && tg.initData) return tg.initData;
+    var hash = window.location.hash || "";
+    var match = /(?:^|[#&])tgWebAppData=([^&]+)/.exec(hash);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  const initData = readInitData();
+
+  let currentPath = "";
+  let currentFile = null;
+  let previewing = false;
+
+  function status(msg, isError) {
+    statusEl.textContent = msg || "";
+    statusEl.classList.toggle("err", !!isError);
+  }
+
+  async function api(path, options) {
+    const opts = Object.assign({}, options || {});
+    opts.headers = Object.assign({}, opts.headers || {});
+    opts.headers["Authorization"] = "Bearer " + initData;
+    const res = await fetch(API + path, opts);
+    if (res.status === 401) throw new Error("Нет доступа — откройте приложение из Telegram");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || ("Ошибка " + res.status));
+    return data;
+  }
+
+  function renderList(data) {
+    currentPath = data.path || "";
+    pathEl.textContent = currentPath || "Файлы";
+    tree.textContent = "";
+    if (data.parent) tree.appendChild(entryRow("📁", "..", data.parent, true));
+    data.entries.forEach(function (item) {
+      tree.appendChild(entryRow(
+        item.is_directory ? "📁" : "📄",
+        item.name, item.path, item.is_directory));
+    });
+    if (!data.entries.length && !data.parent) status("Папка пуста");
+  }
+
+  function entryRow(icon, name, path, isDir) {
+    const row = document.createElement("div");
+    row.className = "entry";
+    const ic = document.createElement("span");
+    ic.className = "icon";
+    ic.textContent = icon;
+    const nm = document.createElement("span");
+    nm.className = "name";
+    nm.textContent = name;
+    row.appendChild(ic);
+    row.appendChild(nm);
+    row.onclick = function () {
+      if (isDir) load(path);
+      else openFile(path, name);
+    };
+    return row;
+  }
+
+  async function load(path) {
+    try {
+      status("Загрузка…");
+      const data = await api("/fs/list?path=" + encodeURIComponent(path || ""));
+      renderList(data);
+      status("");
+    } catch (err) {
+      status(err.message, true);
+    }
+  }
+
+  async function openFile(path, name) {
+    try {
+      status("Открытие…");
+      const data = await api("/fs/read?path=" + encodeURIComponent(path));
+      currentFile = path;
+      textarea.value = data.text || "";
+      preview.textContent = "";
+      editor.classList.add("open");
+      tree.classList.add("hidden");
+      pathEl.textContent = data.path || name;
+      saveBtn.disabled = false;
+      previewBtn.disabled = !data.is_markdown;
+      setPreview(false);
+      status("Ctrl+S — сохранить");
+    } catch (err) {
+      status(err.message, true);
+    }
+  }
+
+  async function save() {
+    if (!currentFile) return;
+    try {
+      status("Сохранение…");
+      await api("/fs/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: currentFile, content: textarea.value })
+      });
+      status("Сохранено");
+    } catch (err) {
+      status(err.message, true);
+    }
+  }
+
+  function setPreview(on) {
+    previewing = on;
+    preview.classList.toggle("open", on);
+    textarea.style.display = on ? "none" : "block";
+    previewBtn.textContent = on ? "Правка" : "Просмотр";
+    if (on) renderMarkdown(textarea.value);
+  }
+
+  function renderMarkdown(text) {
+    preview.textContent = "";
+    text.split("\n").forEach(function (line) {
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      const bullet = line.match(/^[-*]\s+(.*)$/);
+      const quote = line.match(/^>\s?(.*)$/);
+      let node;
+      if (heading) {
+        node = document.createElement("h" + heading[1].length);
+        node.textContent = heading[2];
+      } else if (bullet) {
+        node = document.createElement("li");
+        node.textContent = bullet[1];
+      } else if (quote) {
+        node = document.createElement("blockquote");
+        node.textContent = quote[1];
+      } else if (/^```/.test(line)) {
+        node = document.createElement("pre");
+        node.textContent = line;
+      } else {
+        node = document.createElement("p");
+        node.textContent = line;
+      }
+      preview.appendChild(node);
+    });
+  }
+
+  function closeFile() {
+    currentFile = null;
+    editor.classList.remove("open");
+    tree.classList.remove("hidden");
+    saveBtn.disabled = true;
+    previewBtn.disabled = true;
+    load(currentPath);
+  }
+
+  saveBtn.onclick = save;
+  previewBtn.onclick = function () { setPreview(!previewing); };
+  backBtn.onclick = closeFile;
+  textarea.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
+  });
+
+  (async function () {
+    if (!initData) {
+      status("Откройте приложение из Telegram", true);
+      return;
+    }
+    await load("");
+  })();
+})();
+</script>
+</body>
+</html>
