@@ -85,9 +85,20 @@ hermes config set dashboard.public_url https://your-host
 
 The official Telegram Web App SDK is served from this origin
 (`dashboard/telegram-web-app.js`) so the app still works where `telegram.org`
-is unreachable; the CDN copy is only a fallback. `initData` is parsed from the
-URL fragment independently of the SDK, so the page works even when the SDK
-cannot be fetched.
+is unreachable; the CDN copy is only a fallback.
+
+The launch credential is found by `dashboard/credential.js`, which collects
+every source (the fragment, the query string, the SDK, the SDK's
+sessionStorage copy) and picks the most complete one — one that carries the
+signature. The SDK alone is not trusted first: its parser splits a raw
+fragment on `&` and keeps the first pair, so it publishes a credential with
+no signature, and the gate would reject it.
+
+The page reports what it found through `POST /api/plugins/telegram-miniapp/diag`
+— the credential length, the field count, whether the signature is present,
+and where it came from. No payload and no identity are ever sent. That route
+is unauthenticated (a page that cannot authenticate is exactly the one that
+needs to report it), rate-limited per caller, and capped in size.
 
 ## Verifying
 
@@ -99,6 +110,10 @@ python verify.py
 
 # the API routes and the managed-files policy
 python verify_routes.py
+
+# against a running dashboard: a valid signature is accepted, a tampered
+# payload, a wrong bot token and an anonymous request are all rejected
+python verify_live.py
 
 # a real browser, emulating Telegram's WebView (signed initData in the fragment)
 python verify_browser.py
@@ -123,6 +138,22 @@ The browser checks need `playwright` and a Chromium build; point
 with `@telegram-apps/init-data-node` and requires the Python verifier to accept
 it, then signs one with the Python implementation and requires Telegram's
 library to accept it. A self-consistent implementation cannot pass it.
+
+`verify_live.py` needs a reachable dashboard; point `MINIAPP_API` at it and
+`MINIAPP_BOT_TOKEN` at the bot token when it is not in the environment.
+
+### One Hermes-side prerequisite
+
+The diagnostic probe is a dashboard API route, and the dashboard's auth gate
+must let it through. That needs one entry in Hermes' own allowlist:
+
+```python
+# hermes_cli/dashboard_auth/public_paths.py — PUBLIC_API_PATHS
+"/api/plugins/telegram-miniapp/diag",
+```
+
+Without it the page still works — the probe only adds the diagnosis — but a
+failed launch leaves no trace in the logs.
 
 `verify_editor.py` is what a phone screenshot cannot show: it opens a Markdown
 file, types into the textarea, saves, and reads the file back from disk.
