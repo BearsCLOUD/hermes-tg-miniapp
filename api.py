@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -33,6 +34,12 @@ router = APIRouter()
 _MAX_TEXT_BYTES = 512 * 1024
 _MAX_WRITE_BYTES = 4 * 1024 * 1024
 _MAX_ENTRIES = 2000
+
+# The client diagnostic probe is unauthenticated (it reports a page that could
+# not authenticate), so it is rate-limited per caller and capped in size.
+_MAX_DIAG_BYTES = 8 * 1024
+_DIAG_MIN_INTERVAL_S = 60.0
+_DIAG_LAST_SEEN: dict[str, float] = {}
 
 
 def _require_telegram_user(request: Request) -> str:
@@ -118,6 +125,71 @@ async def fs_list(request: Request, path: str = Query("")):
         "root": str(policy.locked_root) if policy.locked_root else None,
         "can_change_path": policy.can_change_path,
     }
+
+
+@router.post("/diag")
+async def diag(request: Request):
+    """Record what the client-side page found, without requiring a credential.
+
+    The Mini App page cannot always tell whether the launch credential
+    arrived, was truncated, or never came. Without this, a client-side
+    failure and a server-side rejection look identical in the logs.
+
+    Only metadata is accepted: field counts and lengths, never the payload
+    and never the user's identity. The endpoint reveals nothing about the
+    server or the file tree.
+
+    The route is unauthenticated on purpose — the whole point is to report
+    the state of a page that could not authenticate. It therefore accepts a
+    tiny body only and records at most one line per caller per minute, so it
+    cannot be used to flood the log.
+    """
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    last = _DIAG_LAST_SEEN.get(client)
+    if last is not None and now - last < _DIAG_MIN_INTERVAL_S:
+        return {"ok": True, "throttled": True}
+    _DIAG_LAST_SEEN[client] = now
+
+    length = request.headers.get("content-length")
+    try:
+        if int(length or 0) > _MAX_DIAG_BYTES:
+            raise HTTPException(status_code=413, detail="Body too large")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Bad content-length")
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — a malformed probe must not 500
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    def _int(name: str) -> int:
+        try:
+            return max(0, int(body.get(name) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    LOG.info(
+        "telegram-miniapp: client diag reason=%s source=%s complete=%s len=%d "
+        "pairs=%d hash=%s signature=%s fragment=%d query=%d sdk=%s sdk_len=%d "
+        "storage_len=%d client=%s",
+        str(body.get("reason", ""))[:40],
+        str(body.get("source", ""))[:20],
+        bool(body.get("complete")),
+        _int("length"),
+        _int("pairs"),
+        bool(body.get("has_hash")),
+        bool(body.get("has_signature")),
+        _int("fragment_length"),
+        _int("query_length"),
+        bool(body.get("sdk_present")),
+        _int("sdk_length"),
+        _int("storage_length"),
+        client,
+    )
+    return {"ok": True}
 
 
 @router.get("/fs/read")

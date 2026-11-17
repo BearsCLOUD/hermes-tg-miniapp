@@ -8,7 +8,8 @@
      unreachable from some networks, and without the SDK the page has no
      initData. The CDN copy is only a fallback. SRI is not applicable: the
      upstream file is not versioned with an immutable hash. -->
-<script src="/dashboard-plugins/telegram-miniapp/telegram-web-app.js"></script>
+<script src="telegram-web-app.js"></script>
+<script src="credential.js"></script>
 <script>
   if (!window.Telegram || !window.Telegram.WebApp) {
     var fallback = document.createElement("script");
@@ -147,41 +148,14 @@
   // Telegram's signed initData IS the bearer credential: the server verifies
   // the HMAC against the bot token, so no session exchange is needed.
   //
-  // Telegram delivers the launch parameters in the URL fragment
-  // (#tgWebAppData=...) and the whole query string is percent-encoded, so
-  // the "&" separators inside the credential arrive as "%26" and the value
-  // must be decoded as a whole. Telegram's own SDK reads it that way
-  // (urlParseHashParams -> urlParseQueryString).
-  //
-  // The SDK may not have parsed the fragment yet when this script runs, so
-  // the fragment is parsed here as well; both the encoded and the raw form
-  // are handled. Splitting a raw credential on "&" would truncate it at the
-  // first separator and send an unusable bearer token.
-  function readInitData() {
-    if (tg && tg.initData) return tg.initData;
-    var sources = [window.location.hash || "", window.location.search || ""];
-    for (var i = 0; i < sources.length; i++) {
-      var text = sources[i];
-      var marker = "tgWebAppData=";
-      var at = text.indexOf(marker);
-      if (at < 0) continue;
-      var rest = text.slice(at + marker.length);
-      var encoded = rest.indexOf("%3D") >= 0 || rest.indexOf("%26") >= 0;
-      if (encoded) {
-        var amp = rest.indexOf("&");
-        var value = amp >= 0 ? rest.slice(0, amp) : rest;
-        try {
-          return decodeURIComponent(value);
-        } catch (e) { /* fall through to the raw value */ }
-        return value;
-      }
-      // Raw form: the credential is the remainder of the fragment.
-      return rest;
-    }
-    return "";
-  }
-
-  let initData = readInitData();
+  // Where the credential comes from, and in what shape, is decided by
+  // credential.js: the fragment and the query string are read whole, the
+  // SDK's own copy and its sessionStorage copy are considered, and the most
+  // complete candidate wins. The SDK alone is not trusted first — on a raw
+  // fragment it publishes a truncated value (no signature), and a page that
+  // sends that as a bearer token is rejected by the gate.
+  let credential = window.miniappCredential.read();
+  let initData = credential.value;
 
   let currentPath = "";
   let currentFile = null;
@@ -201,6 +175,36 @@
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || ("Ошибка " + res.status));
     return data;
+  }
+
+  // Report what this page actually found, so a client-side failure can be
+  // told apart from a server-side one without guessing from the server logs.
+  // The payload itself is never sent: only its length and shape.
+  async function reportDiag(reason, detail) {
+    try {
+      var shape = window.miniappCredential.describe(
+        window.miniappCredential.read()
+      );
+      await fetch(API + "/diag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: reason,
+          detail: detail || "",
+          source: shape.source,
+          complete: shape.complete,
+          length: shape.length,
+          pairs: shape.pairs,
+          has_hash: shape.has_hash,
+          has_signature: shape.has_signature,
+          fragment_length: shape.fragment_length,
+          query_length: shape.query_length,
+          sdk_present: shape.sdk_present,
+          sdk_length: shape.sdk_length,
+          storage_length: shape.storage_length,
+        }),
+      });
+    } catch (e) { /* diagnostics must never break the app */ }
   }
 
   function renderList(data) {
@@ -335,19 +339,19 @@
     // credential is not yet a failure: wait for the SDK to publish initData
     // before giving up. Without this the page reports "open the app from
     // Telegram" on a slow connection even though the credential is there.
-    var credential = initData;
-    if (!credential) {
+    if (!credential.complete) {
       status("Подключение к Telegram…");
-      for (var attempt = 0; attempt < 50 && !credential; attempt++) {
+      for (var attempt = 0; attempt < 50 && !credential.complete; attempt++) {
         await new Promise(function (r) { setTimeout(r, 100); });
-        credential = readInitData();
+        credential = window.miniappCredential.read();
       }
     }
-    if (!credential) {
+    initData = credential.value;
+    if (!credential.complete) {
       status("Откройте приложение из Telegram", true);
+      await reportDiag("no_credential", credential.source);
       return;
     }
-    initData = credential;
     await load("");
   })();
 })();
