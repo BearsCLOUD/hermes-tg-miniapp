@@ -174,7 +174,7 @@ async def diag(request: Request):
     LOG.info(
         "telegram-miniapp: client diag reason=%s source=%s complete=%s len=%d "
         "pairs=%d hash=%s signature=%s fragment=%d query=%d sdk=%s sdk_len=%d "
-        "storage_len=%d client=%s",
+        "storage_len=%d client=%s detail=%s",
         str(body.get("reason", ""))[:40],
         str(body.get("source", ""))[:20],
         bool(body.get("complete")),
@@ -188,6 +188,7 @@ async def diag(request: Request):
         _int("sdk_length"),
         _int("storage_length"),
         client,
+        str(body.get("detail", ""))[:120],
     )
     return {"ok": True}
 

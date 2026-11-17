@@ -154,7 +154,24 @@
   // complete candidate wins. The SDK alone is not trusted first — on a raw
   // fragment it publishes a truncated value (no signature), and a page that
   // sends that as a bearer token is rejected by the gate.
-  let credential = window.miniappCredential.read();
+  // credential.js is served from this origin, so it is normally there; if it
+  // is not, the page must still say so instead of dying on a blank screen.
+  const credentialApi = window.miniappCredential || {
+    read: function () {
+      return { value: "", source: "", complete: false };
+    },
+    describe: function () {
+      return {
+        source: "", complete: false, length: 0, pairs: 0,
+        has_hash: false, has_signature: false,
+        fragment_length: (window.location.hash || "").length,
+        query_length: (window.location.search || "").length,
+        sdk_present: !!(window.Telegram && window.Telegram.WebApp),
+        sdk_length: 0, storage_length: 0,
+      };
+    },
+  };
+  let credential = credentialApi.read();
   let initData = credential.value;
 
   let currentPath = "";
@@ -182,9 +199,7 @@
   // The payload itself is never sent: only its length and shape.
   async function reportDiag(reason, detail) {
     try {
-      var shape = window.miniappCredential.describe(
-        window.miniappCredential.read()
-      );
+      var shape = credentialApi.describe(credentialApi.read());
       await fetch(API + "/diag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -343,7 +358,7 @@
       status("Подключение к Telegram…");
       for (var attempt = 0; attempt < 50 && !credential.complete; attempt++) {
         await new Promise(function (r) { setTimeout(r, 100); });
-        credential = window.miniappCredential.read();
+        credential = credentialApi.read();
       }
     }
     initData = credential.value;
@@ -352,6 +367,11 @@
       await reportDiag("no_credential", credential.source);
       return;
     }
+    // The credential is present and usable. Report it, so that "the page
+    // opened but Telegram delivered no credential" is told apart from
+    // "the page never opened" — without this the two look identical in
+    // the logs, because a page that never runs sends nothing at all.
+    await reportDiag("launch_ok", credential.source);
     await load("");
   })();
 })();
