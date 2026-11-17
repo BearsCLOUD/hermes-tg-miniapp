@@ -222,6 +222,25 @@
     } catch (e) { /* diagnostics must never break the app */ }
   }
 
+  // A script error before the first fetch leaves no server-side trace at
+  // all, so it is reported here. Only the error's own message and location
+  // are sent — never the credential, the URL, or the user's data.
+  window.addEventListener("error", function (event) {
+    reportDiag(
+      "js_error",
+      String((event && event.message) || "error") + " @" +
+        String((event && event.filename) || "") + ":" +
+        String((event && event.lineno) || "")
+    );
+  });
+  window.addEventListener("unhandledrejection", function (event) {
+    var reason = event && event.reason;
+    reportDiag(
+      "unhandled_rejection",
+      String((reason && reason.message) || reason || "rejection")
+    );
+  });
+
   function renderList(data) {
     currentPath = data.path || "";
     pathEl.textContent = currentPath || "Файлы";
